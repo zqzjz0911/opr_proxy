@@ -1,46 +1,51 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import axios from 'axios';
-import keyManager from './services/KeyManager.js';
 import { requestLoggingMiddleware, logError } from './services/logger.js';
 
 dotenv.config();
+
+// Helper function to extract and randomly select API key from Authorization header
+function extractRandomApiKey(req) {
+  try {
+    // Get Authorization header
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader) {
+      throw new Error('Authorization header is missing');
+    }
+    
+    // Extract the token part (after "Bearer ")
+    const tokenPart = authHeader.startsWith('Bearer ') 
+      ? authHeader.substring(7)
+      : authHeader;
+    
+    if (!tokenPart) {
+      throw new Error('Authorization token is empty');
+    }
+    
+    // Split by semicolon to get multiple keys
+    const keys = tokenPart.split(';').map(k => k.trim()).filter(k => k);
+    
+    if (keys.length === 0) {
+      throw new Error('No valid API keys found in Authorization header');
+    }
+    
+    // Randomly select one key
+    const randomKey = keys[Math.floor(Math.random() * keys.length)];
+    
+    return randomKey;
+  } catch (error) {
+    logError(error, { context: 'API key extraction' });
+    throw error;
+  }
+}
 
 // Vercel Serverless Function adapter
 const createServer = async () => {
   const app = express();
   app.use(express.json({ limit: '50mb' }));
   app.use(requestLoggingMiddleware);
-
-  // Initialize with default key if provided
-  const initializeKeys = async () => {
-    try {
-      const defaultKey = process.env.OPENROUTER_API_KEYS;
-      if (defaultKey) {
-        await keyManager.addKey(defaultKey);
-      }
-      await keyManager.initialize();
-    } catch (error) {
-      logError(error, { context: 'Key initialization' });
-    }
-  };
-
-  await initializeKeys().catch(error => logError(error, { context: 'initializeKeys' }));
-
-  // Admin endpoint to add new API keys
-  app.post('/admin/keys', async (req, res) => {
-    try {
-      const { key } = req.body;
-      if (!key) {
-        return res.status(400).json({ error: 'API key is required' });
-      }
-      await keyManager.addKey(key);
-      res.json({ message: 'API key added successfully' });
-    } catch (error) {
-      logError(error, { context: 'Admin API key addition' });
-      res.status(500).json({ error: error.message });
-    }
-  });
 
   // Helper function to handle streaming response
   async function handleStreamingResponse(axiosResponse, res) {
@@ -62,13 +67,13 @@ const createServer = async () => {
 
     while (retryCount < maxRetries) {
       try {
-        // Get the current key or rotate if needed
-        const currentKey = await keyManager.getKey();
+        // Extract random API key from Authorization header
+        const apiKey = extractRandomApiKey(req);
         
         const axiosConfig = {
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${currentKey}`,
+            'Authorization': `Bearer ${apiKey}`,
             'HTTP-Referer': process.env.HTTP_REFERER || 'http://localhost:3000',
             'X-Title': process.env.SITE_NAME || 'OpenRouterProxy'
           }
@@ -85,9 +90,6 @@ const createServer = async () => {
           axiosConfig
         );
 
-        // Mark the successful use of the key
-        await keyManager.markKeySuccess();
-
         // Handle streaming response differently
         if (isStreaming) {
           return handleStreamingResponse(response, res);
@@ -95,8 +97,6 @@ const createServer = async () => {
 
         return res.json(response.data);
       } catch (error) {
-        const isRateLimit = await keyManager.markKeyError(error);
-
         // Handle streaming errors by ending the response
         if (isStreaming && res.writableEnded === false) {
           res.write(`data: ${JSON.stringify({
@@ -110,7 +110,7 @@ const createServer = async () => {
         }
 
         // Only retry on rate limits or server errors
-        if ((isRateLimit || error.response?.status >= 500) && retryCount < maxRetries - 1) {
+        if ((error.response?.status === 429 || error.response?.status >= 500) && retryCount < maxRetries - 1) {
           retryCount++;
           continue;
         }
@@ -142,10 +142,12 @@ const createServer = async () => {
 
     while (retryCount < maxRetries) {
       try {
-        const currentKey = await keyManager.getKey();
+        // Extract random API key from Authorization header
+        const apiKey = extractRandomApiKey(req);
+        
         const axiosConfig = {
           headers: {
-            'Authorization': `Bearer ${currentKey}`,
+            'Authorization': `Bearer ${apiKey}`,
             'HTTP-Referer': process.env.HTTP_REFERER || 'http://localhost:3000',
             'X-Title': process.env.SITE_NAME || 'OpenRouterProxy'
           }
@@ -156,12 +158,10 @@ const createServer = async () => {
           axiosConfig
         );
 
-        await keyManager.markKeySuccess();
         return res.json(response.data);
       } catch (error) {
-        const isRateLimit = await keyManager.markKeyError(error);
-
-        if ((isRateLimit || error.response?.status >= 500) && retryCount < maxRetries - 1) {
+        // Only retry on rate limits or server errors
+        if ((error.response?.status === 429 || error.response?.status >= 500) && retryCount < maxRetries - 1) {
           retryCount++;
           continue;
         }
