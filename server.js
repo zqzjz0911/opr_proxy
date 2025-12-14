@@ -59,6 +59,13 @@ const createServer = async () => {
     res.end();
   }
 
+  // Root path handler
+  app.get('/', (req, res) => {
+    res.status(200).setHeader('Content-Type', 'text/html').end(
+      'openrouter proxy is running!'
+    );
+  });
+
   // OpenRouter proxy endpoint
   app.post('/v1/chat/completions', async (req, res) => {
     const maxRetries = 3;
