@@ -1,7 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import axios from 'axios';
-import { requestLoggingMiddleware, logError } from './services/logger.js';
 
 dotenv.config();
 
@@ -36,7 +35,6 @@ function extractRandomApiKey(req) {
     
     return randomKey;
   } catch (error) {
-    logError(error, { context: 'API key extraction' });
     throw error;
   }
 }
@@ -45,7 +43,6 @@ function extractRandomApiKey(req) {
 const createServer = async () => {
   const app = express();
   app.use(express.json({ limit: '50mb' }));
-  app.use(requestLoggingMiddleware);
 
   // Helper function to handle streaming response
   async function handleStreamingResponse(axiosResponse, res) {
@@ -122,12 +119,6 @@ const createServer = async () => {
           continue;
         }
 
-        logError(error, { 
-          context: 'Chat completions',
-          retryCount,
-          statusCode: error.response?.status,
-          streaming: isStreaming
-        });
 
         // For non-streaming requests, send error response
         if (!isStreaming) {
@@ -173,12 +164,6 @@ const createServer = async () => {
           continue;
         }
 
-        logError(error, { 
-          context: 'Models endpoint',
-          retryCount,
-          statusCode: error.response?.status
-        });
-
         return res.status(error.response?.status || 500).json({
           error: {
             message: error.response?.data?.error?.message || error.message,
@@ -191,12 +176,6 @@ const createServer = async () => {
 
   // Error handling middleware
   app.use((err, req, res, next) => {
-    logError(err, { 
-      context: 'Global error handler',
-      url: req.url,
-      method: req.method
-    });
-   
     res.status(500).json({
       error: {
         message: 'Internal server error',
